@@ -2,6 +2,10 @@
 
 A high-performance asyncio crawler with SQLite WAL + FTS5 indexing, resumable queue checkpoints, robots.txt politeness, and a Rich-powered live terminal dashboard.
 
+## Repository
+
+GitHub: https://github.com/berkay125/crawler-example
+
 ## Deliverables (Final-4)
 
 - Code: [crawler.py](crawler.py), [database.py](database.py), [search.py](search.py), [cli.py](cli.py)
