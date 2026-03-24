@@ -1,0 +1,67 @@
+\documentclass[11pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\geometry{margin=1in}
+
+\title{Crawler Grading Verification Sheet}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{1. Storage File Check}
+Crawled data is available in the required raw storage file:
+\begin{itemize}
+  \item Path: \texttt{data/storage/p.data}
+\end{itemize}
+
+\section*{2. Chosen Word}
+Chosen word that appears on multiple URLs:
+\begin{itemize}
+  \item \texttt{python}
+\end{itemize}
+
+\section*{3. Three Entries from \texttt{p.data}}
+(Format: \texttt{word url origin depth frequency})
+\begin{enumerate}[label=Entry \arabic*:]
+  \item \texttt{python https://docs.python.org/3/ https://docs.python.org/3/ 0 55}
+  \item \texttt{python https://docs.python.org/3.13/ https://docs.python.org/3/ 1 55}
+  \item \texttt{python https://docs.python.org/3.8/ https://docs.python.org/3/ 1 20}
+\end{enumerate}
+
+\section*{4. API Query}
+\texttt{GET http://localhost:3600/search?query=python\&sortBy=relevance}
+
+\section*{5. API \#1 Result}
+\begin{itemize}
+  \item URL: \url{https://docs.python.org/3/contents.html}
+  \item relevance\_score: \texttt{5475}
+\end{itemize}
+
+\section*{6. Manual Score Calculation}
+Formula:
+\[
+\text{score} = (\text{frequency} \times 10) + 1000 - (\text{depth} \times 5)
+\]
+
+\begin{itemize}
+  \item Entry 1 score: \((55 \times 10) + 1000 - (0 \times 5) = 1550\)
+  \item Entry 2 score: \((55 \times 10) + 1000 - (1 \times 5) = 1545\)
+  \item Entry 3 score: \((20 \times 10) + 1000 - (1 \times 5) = 1195\)
+\end{itemize}
+
+\section*{7. Does the Highest Manual Score Match API \#1?}
+\begin{itemize}
+  \item Answer: \textbf{No}
+\end{itemize}
+
+\section*{8. How to Enhance This Process (Chain-of-Thought Style Process Design)}
+A stronger process is to make verification explicit and reproducible in ordered reasoning steps. First, build a deterministic checker script that scans \texttt{p.data}, groups rows by \texttt{word}, and computes the exact same scoring function used by the API for every row. Second, for a selected query word, automatically extract a fixed sample set (e.g., top 3 by frequency or top 3 by score) and generate a side-by-side comparison table between \emph{manual formula output} and \emph{API output}. Third, add pass/fail assertions (score equality, sort order, required fields, and endpoint status code) so discrepancies are detected immediately.
+
+In addition, add a continuous validation pipeline: run crawler on a known seed, freeze a snapshot of \texttt{p.data}, run API checks, and export a report artifact (CSV or LaTeX/PDF). This turns grading validation into an auditable workflow instead of ad-hoc spot checks, reduces human error in arithmetic, and makes future changes to scoring/storage contracts safer because regressions are caught automatically.
+
+\end{document}

@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import asyncio
-import html
+import re
 import signal
+from collections import Counter
 from dataclasses import dataclass
-from html.parser import HTMLParser
 from typing import Awaitable, Callable, Optional
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 from urllib.parse import urljoin, urlparse, urldefrag
 from urllib.robotparser import RobotFileParser
 
+from bs4 import BeautifulSoup
+
 from database import CrawlDatabase, CrawlTask
+from flat_storage import FlatFileWordStore
 
 
 ProgressCallback = Callable[["CrawlStats", int, int], Awaitable[None] | None]
@@ -30,6 +33,7 @@ class CrawlerConfig:
     max_concurrency: int = 18
     request_timeout_seconds: float = 10.0
     user_agent: str = "AdvancedCrawlerBot/1.0"
+    storage_file_path: str = "data/storage/p.data"
 
 
 @dataclass(frozen=True)
@@ -40,47 +44,30 @@ class FetchResult:
     error: Optional[str] = None
 
 
-class _NativeHtmlExtractor(HTMLParser):
-    """Lightweight native HTML extractor for title, visible text, and links."""
-
-    def __init__(self, base_url: str) -> None:
-        super().__init__(convert_charrefs=True)
-        self.base_url = base_url
-        self.in_title = False
-        self.title_parts: list[str] = []
-        self.text_parts: list[str] = []
-        self.links: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        if tag == "title":
-            self.in_title = True
-
-        if tag == "a":
-            href = dict(attrs).get("href")
-            if href:
-                absolute = urljoin(self.base_url, href)
-                self.links.append(absolute)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "title":
-            self.in_title = False
-
-    def handle_data(self, data: str) -> None:
-        cleaned = data.strip()
-        if not cleaned:
-            return
-
-        self.text_parts.append(cleaned)
-        if self.in_title:
-            self.title_parts.append(cleaned)
-
-    @property
-    def title(self) -> str:
-        return " ".join(self.title_parts).strip()
-
-    @property
-    def text(self) -> str:
-        return " ".join(self.text_parts).strip()
+STOP_WORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "in",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "to",
+    "was",
+    "were",
+    "with",
+}
 
 
 class ConcurrentCrawler:
@@ -108,6 +95,7 @@ class ConcurrentCrawler:
 
         self._robots_cache: dict[str, RobotFileParser] = {}
         self._robots_cache_lock = asyncio.Lock()
+        self._word_store = FlatFileWordStore(file_path=self.config.storage_file_path)
 
         self.stats = CrawlStats()
 
@@ -244,6 +232,11 @@ class ConcurrentCrawler:
                     status_code=fetch_result.status_code,
                     error=None,
                 )
+                await asyncio.to_thread(
+                    self._persist_word_frequencies,
+                    task,
+                    text_content,
+                )
 
                 if task.depth >= max_depth or not self._accept_new_urls:
                     return
@@ -276,21 +269,38 @@ class ConcurrentCrawler:
             excerpt = html_body[:1000]
             return "", excerpt, []
 
-        parser = _NativeHtmlExtractor(base_url)
-        parser.feed(html_body)
+        soup = BeautifulSoup(html_body, "html.parser")
+        for removable in soup(["script", "style", "noscript"]):
+            removable.decompose()
 
-        title = html.unescape(parser.title)
-        text_content = html.unescape(parser.text)
+        title = soup.title.get_text(" ", strip=True) if soup.title else ""
+        text_content = soup.get_text(separator=" ", strip=True)
 
         links: list[str] = []
-        for href in parser.links:
-            absolute = self._normalize_url(href)
+        for anchor in soup.find_all("a", href=True):
+            absolute = self._normalize_url(urljoin(base_url, anchor["href"]))
             parsed = urlparse(absolute)
             if parsed.scheme not in {"http", "https"}:
                 continue
             links.append(absolute)
 
         return title, text_content, links
+
+    @staticmethod
+    def _text_to_word_frequencies(text: str) -> Counter[str]:
+        """Lowercases text, removes punctuation, and counts word frequencies."""
+        words = re.findall(r"[a-z0-9]+", text.lower())
+        filtered = [word for word in words if len(word) > 1 and word not in STOP_WORDS]
+        return Counter(filtered)
+
+    def _persist_word_frequencies(self, task: CrawlTask, page_text: str) -> int:
+        frequencies = self._text_to_word_frequencies(page_text)
+        return self._word_store.append_frequencies(
+            url=task.url,
+            origin_url=task.origin_url,
+            depth=task.depth,
+            frequencies=frequencies,
+        )
 
     async def _is_allowed_by_robots(self, target_url: str) -> bool:
         parser = await self._get_robots_parser(target_url)
